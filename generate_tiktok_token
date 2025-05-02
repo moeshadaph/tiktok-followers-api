@@ -1,0 +1,206 @@
+import json
+import time
+import threading
+import random
+from flask import Flask, jsonify
+from selenium import webdriver
+from selenium.webdriver.common.by import By
+from selenium.webdriver.chrome.service import Service
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+from selenium.common.exceptions import TimeoutException
+from webdriver_manager.chrome import ChromeDriverManager
+from selenium.webdriver.chrome.options import Options
+import re
+
+app = Flask(__name__)
+
+cache = {
+    "username": "lyonmag69",
+    "followers": 0,
+    "last_updated": None
+}
+
+def get_tiktok_followers(username):
+    url = f"https://www.tiktok.com/@{username}"
+
+    options = Options()
+    options.add_argument('--headless')
+    options.add_argument('--no-sandbox')
+    options.add_argument('--disable-dev-shm-usage')
+    options.add_argument('--lang=fr-FR')
+    options.add_argument('--disable-blink-features=AutomationControlled')
+    options.add_argument('--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/96.0.4664.110 Safari/537.36')
+    
+    service = Service(ChromeDriverManager().install())
+    driver = webdriver.Chrome(service=service, options=options)
+    
+    try:
+        print(f"Accès à {url}")
+        driver.get(url)
+        
+        # Attendre que la page charge complètement
+        time.sleep(random.uniform(5, 8))
+        
+        # Méthode 1: Recherche par classe (plus fiable actuellement)
+        try:
+            wait = WebDriverWait(driver, 10)
+            # Essayer différents sélecteurs car TikTok change souvent sa structure
+            followers_selectors = [
+                "strong[data-e2e='followers-count']",
+                "strong[data-e2e='followers']",
+                "[data-e2e='followers-count']",
+                "h2[data-e2e='followers-count']",
+                "h2.count-infos span[title]",
+                ".tiktok-1kd69dk-StrongText"
+            ]
+            
+            for selector in followers_selectors:
+                try:
+                    followers_element = wait.until(
+                        EC.presence_of_element_located((By.CSS_SELECTOR, selector))
+                    )
+                    followers_text = followers_element.text or followers_element.get_attribute("title")
+                    
+                    if followers_text:
+                        # Convertir des formats comme "1.2M" en nombres
+                        followers_text = followers_text.replace(',', '').replace(' ', '')
+                        if 'K' in followers_text or 'k' in followers_text:
+                            followers = float(followers_text.replace('K', '').replace('k', '')) * 1000
+                        elif 'M' in followers_text or 'm' in followers_text:
+                            followers = float(followers_text.replace('M', '').replace('m', '')) * 1000000
+                        else:
+                            followers = int(followers_text)
+                        
+                        print(f"Nombre d'abonnés trouvé: {followers}")
+                        return int(followers)
+                    
+                except:
+                    continue
+                    
+            # Méthode 2: Alternative avec regex si les sélecteurs ne fonctionnent pas
+            html = driver.page_source
+            # Recherche de modèles courants pour les abonnés dans le HTML
+            patterns = [
+                r'"followerCount"\s*:\s*(\d+)',
+                r'"followers"\s*:\s*"(\d+)"',
+                r'"followerCount"\s*:\s*"(\d+)"',
+                r'"follower_count"\s*:\s*(\d+)',
+                r'"fans"\s*:\s*(\d+)',
+                r'"fans_count"\s*:\s*(\d+)',
+            ]
+            
+            for pattern in patterns:
+                match = re.search(pattern, html)
+                if match:
+                    followers = int(match.group(1))
+                    print(f"Nombre d'abonnés trouvé via regex: {followers}")
+                    return followers
+            
+            print("Impossible de trouver le nombre d'abonnés")
+            return None
+            
+        except TimeoutException:
+            print("Timeout en attendant que les éléments se chargent")
+            
+            # Tentative de dernière chance avec extraction JSON
+            html = driver.page_source
+            json_match = re.search(r'<script id="SIGI_STATE" type="application/json">(.*?)</script>', html)
+            if json_match:
+                try:
+                    json_data = json.loads(json_match.group(1))
+                    # Explorer différents chemins possibles dans le JSON
+                    paths = [
+                        ['UserModule', 'users', username, 'followerCount'],
+                        ['UserModule', 'users', username, 'stats', 'followerCount'],
+                        ['UserPage', 'userInfo', 'stats', 'followerCount'],
+                        ['UserPage', 'user', 'stats', 'followerCount']
+                    ]
+                    
+                    for path in paths:
+                        try:
+                            data = json_data
+                            for key in path:
+                                data = data[key]
+                            if isinstance(data, (int, str)):
+                                followers = int(data)
+                                print(f"Nombre d'abonnés trouvé via JSON: {followers}")
+                                return followers
+                        except (KeyError, TypeError):
+                            continue
+                except json.JSONDecodeError:
+                    pass
+            
+            return None
+            
+    except Exception as e:
+        print(f"Erreur: {str(e)}")
+        return None
+    finally:
+        driver.quit()
+
+def use_tiktok_api(username):
+    """
+    Méthode alternative utilisant une API tierce comme Exolyt
+    Pour l'utiliser, vous devrez obtenir une clé API auprès du service
+    """
+    try:
+        import requests
+        
+        # Remplacez YOUR_API_KEY par votre clé API d'Exolyt ou un autre service
+        # api_key = "YOUR_API_KEY"
+        # url = f"https://api.exolyt.com/user/{username}"
+        # headers = {"Authorization": f"Bearer {api_key}"}
+        
+        # Exemple avec une API publique (à remplacer par la vraie API)
+        url = f"https://tiktok-api-alternative.p.rapidapi.com/user/info?username={username}"
+        headers = {
+            "X-RapidAPI-Key": "VOTRE_CLE_API",
+            "X-RapidAPI-Host": "tiktok-api-alternative.p.rapidapi.com"
+        }
+        
+        response = requests.get(url, headers=headers)
+        if response.status_code == 200:
+            data = response.json()
+            # Adaptez le chemin selon la structure de l'API
+            followers = data.get("stats", {}).get("followerCount")
+            if followers:
+                return int(followers)
+        return None
+    except Exception as e:
+        print(f"Erreur API: {str(e)}")
+        return None
+
+def update_followers_every(interval_seconds=3600):
+    while True:
+        # Essayer d'abord avec Selenium
+        followers = get_tiktok_followers(cache["username"])
+        
+        # Si ça échoue, essayer avec une API (si configurée)
+        if followers is None:
+            # Décommentez pour utiliser l'API alternative
+            # followers = use_tiktok_api(cache["username"])
+            pass
+            
+        if followers is not None:
+            cache["followers"] = followers
+            cache["last_updated"] = time.strftime("%Y-%m-%d %H:%M:%S")
+            with open('followers.json', 'w', encoding='utf-8') as f:
+                json.dump(cache, f, ensure_ascii=False, indent=4)
+            print(f"Mise à jour réussie: {followers} abonnés")
+        else:
+            print("Échec de la mise à jour des abonnés")
+            
+        # Ajouter une variation aléatoire à l'intervalle pour éviter la détection
+        sleep_time = interval_seconds + random.randint(-300, 300)
+        print(f"Prochaine mise à jour dans {sleep_time//60} minutes")
+        time.sleep(sleep_time)
+
+@app.route('/tiktok/followers', methods=['GET'])
+def tiktok_followers():
+    return jsonify(cache)
+
+if __name__ == '__main__':
+    # Démarrer le thread de mise à jour
+    threading.Thread(target=update_followers_every, daemon=True).start()
+    app.run(debug=False, host='0.0.0.0', port=5000)
